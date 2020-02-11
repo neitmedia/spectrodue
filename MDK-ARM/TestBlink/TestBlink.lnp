@@ -1,0 +1,28 @@
+--cpu=Cortex-M4.fp.sp
+"testblink\startup_stm32f429xx.o"
+"testblink\ads8860.o"
+"testblink\main.o"
+"testblink\stm32f4xx_it.o"
+"testblink\stm32f4xx_hal_msp.o"
+"testblink\stm32f4xx_hal_spi.o"
+"testblink\stm32f4xx_hal_rcc.o"
+"testblink\stm32f4xx_hal_rcc_ex.o"
+"testblink\stm32f4xx_hal_flash.o"
+"testblink\stm32f4xx_hal_flash_ex.o"
+"testblink\stm32f4xx_hal_flash_ramfunc.o"
+"testblink\stm32f4xx_hal_gpio.o"
+"testblink\stm32f4xx_hal_dma_ex.o"
+"testblink\stm32f4xx_hal_dma.o"
+"testblink\stm32f4xx_hal_pwr.o"
+"testblink\stm32f4xx_hal_pwr_ex.o"
+"testblink\stm32f4xx_hal_cortex.o"
+"testblink\stm32f4xx_hal.o"
+"testblink\stm32f4xx_hal_exti.o"
+"testblink\stm32f4xx_hal_tim.o"
+"testblink\stm32f4xx_hal_tim_ex.o"
+"testblink\stm32f4xx_hal_uart.o"
+"testblink\system_stm32f4xx.o"
+--library_type=microlib --strict --scatter "TestBlink\TestBlink.sct"
+--summary_stderr --info summarysizes --map --load_addr_map_info --xref --callgraph --symbols
+--info sizes --info totals --info unused --info veneers
+--list "TestBlink.map" -o TestBlink\TestBlink.axf
