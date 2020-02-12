@@ -1,4 +1,5 @@
 #include "ADS8860.h"
+#include "globalvars.h"
 
 static void DIN_Set(void) 
 {
@@ -21,7 +22,7 @@ uint16_t ADS8860_ReadValue(void)
 	CONVST_Set();
 	delay_600ns();
 	CONVST_Reset();
-
+  uint16_t val;
 	/*HAL_SPI_Receive(&ADS8860_SPI_Port, &readBuffer, 8, 0xFFFF);
 	adcReadBuffer = readBuffer;
 	readBuffer = 0;
@@ -31,8 +32,7 @@ uint16_t ADS8860_ReadValue(void)
 	/*HAL_SPI_Receive(&ADS8860_SPI_Port, buffer, 2, 1);
 	adcReadBuffer = ((uint16_t) buffer[0] << 8) | ((uint16_t) buffer[1]);*/
 	/*HAL_SPI_Receive(&ADS8860_SPI_Port, &adcReadBuffer, 16, 0xFFFF);*/
-
-  uint16_t val;
+	
 	HAL_SPI_Receive(&ADS8860_SPI_Port, (uint8_t *)&val, 1, 10);
 	
 	HAL_GPIO_WritePin(SCLK_Port, SCLK_Pin, GPIO_PIN_RESET);
