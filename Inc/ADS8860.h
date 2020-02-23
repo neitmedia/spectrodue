@@ -1,20 +1,22 @@
+/*
+The following code is roughly based on code taken from
+https://github.com/Floyd-Fish/ADS8860-STM32F4
+*/
+
 #include "main.h"
 
-#define SCLK_Pin GPIO_PIN_5
-#define SCLK_Port GPIOA
+// Declaration of DIN PIN
 #define DIN_Pin GPIO_PIN_7
 #define DIN_Port GPIOA
-#define DOUT_Pin GPIO_PIN_6
-#define DOUT_Port GPIOA
+
+// Declaration of CONVST PIN
 #define CONVST_Pin GPIO_PIN_4
 #define CONVST_Port GPIOA
 
+// Declaration of used SPI Port
 #define ADS8860_SPI_Port hspi1
 extern SPI_HandleTypeDef ADS8860_SPI_Port;
 
-#define Conversation_Relay 100
-
+// Declaration of external used functions
 uint16_t ADS8860_ReadValue(void);
-
-void delay_600ns(void);
 void ads8860_Init(void);

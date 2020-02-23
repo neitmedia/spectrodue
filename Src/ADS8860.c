@@ -1,59 +1,52 @@
+/*
+The following code is roughly based on code taken from
+https://github.com/Floyd-Fish/ADS8860-STM32F4
+*/
+
 #include "ADS8860.h"
-#include "globalvars.h"
 
 static void DIN_Set(void) 
 {
+	// Set DIN Pin to HIGH level
 	HAL_GPIO_WritePin(DIN_Port, DIN_Pin, GPIO_PIN_SET);
 }
 
 static void CONVST_Reset(void) 
 { 
+	// Set CONVST Pin to LOW level
 	HAL_GPIO_WritePin(CONVST_Port, CONVST_Pin, GPIO_PIN_RESET);
 }
 
 static void CONVST_Set(void) 
 { 
+	// Set CONVST Pin to HIGH level
 	HAL_GPIO_WritePin(CONVST_Port, CONVST_Pin, GPIO_PIN_SET);
 }
 
+static void CONVST_Delay(void)
+{
+	// Do nothing for some cycles
+	for (uint8_t i = 0; i < 3; i++) {
+		__nop();
+	}
+}
+
+/* The following function gives out a
+short pulse (~ 250 ns) on CONVST that tells the ADC to start sampling.
+After this, it reads in 16 bits via SPI */
 uint16_t ADS8860_ReadValue(void)
 {
-	DIN_Set();
 	CONVST_Set();
-	delay_600ns();
+	CONVST_Delay();
 	CONVST_Reset();
-  uint16_t val;
-	/*HAL_SPI_Receive(&ADS8860_SPI_Port, &readBuffer, 8, 0xFFFF);
-	adcReadBuffer = readBuffer;
-	readBuffer = 0;
-	HAL_SPI_Receive(&ADS8860_SPI_Port, &readBuffer, 8, 0xFFFF);
-	adcReadBuffer = adcReadBuffer << 8;
-	adcReadBuffer |= readBuffer;*/
-	/*HAL_SPI_Receive(&ADS8860_SPI_Port, buffer, 2, 1);
-	adcReadBuffer = ((uint16_t) buffer[0] << 8) | ((uint16_t) buffer[1]);*/
-	/*HAL_SPI_Receive(&ADS8860_SPI_Port, &adcReadBuffer, 16, 0xFFFF);*/
-	
+  
+	uint16_t val;
 	HAL_SPI_Receive(&ADS8860_SPI_Port, (uint8_t *)&val, 1, 10);
 	
-	HAL_GPIO_WritePin(SCLK_Port, SCLK_Pin, GPIO_PIN_RESET);
-	HAL_GPIO_WritePin(DOUT_Port, DOUT_Pin, GPIO_PIN_RESET);
 	return val;
 }
 
-void delay_600ns(void)
-{
-	for (uint8_t i = 0; i < 10; i++)
-		__nop();
-
-}
-
-void delay_ticks(int n)
-{
-	for (uint8_t i = 0; i < n; i++)
-		__nop();
-
-}
-
+/* The following function sets DIN to HIGH level and CONVST to LOW level */
 void ads8860_Init(void)
 {
 	DIN_Set();

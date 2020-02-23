@@ -338,7 +338,7 @@
               <MiscControls></MiscControls>
               <Define>USE_HAL_DRIVER,STM32F429xx</Define>
               <Undefine></Undefine>
-              <IncludePath>../Inc;                                     ../Drivers/STM32F4xx_HAL_Driver/Inc;                                     ../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy;                                     ../Drivers/CMSIS/Device/ST/STM32F4xx/Include;                                     ../Drivers/CMSIS/Include</IncludePath>
+              <IncludePath>../Inc;                                                   ../Drivers/STM32F4xx_HAL_Driver/Inc;                                                   ../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy;                                                   ../Drivers/CMSIS/Device/ST/STM32F4xx/Include;                                                   ../Drivers/CMSIS/Include</IncludePath>
             </VariousControls>
           </Cads>
           <Aads>
@@ -423,6 +423,11 @@
           <GroupName>Drivers/STM32F4xx_HAL_Driver</GroupName>
           <Files>
             <File>
+              <FileName>stm32f4xx_hal_usart.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_usart.c</FilePath>
+            </File>
+            <File>
               <FileName>stm32f4xx_hal_spi.c</FileName>
               <FileType>1</FileType>
               <FilePath>../Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_spi.c</FilePath>
@@ -506,11 +511,6 @@
               <FileName>stm32f4xx_hal_uart.c</FileName>
               <FileType>1</FileType>
               <FilePath>../Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_uart.c</FilePath>
-            </File>
-            <File>
-              <FileName>stm32f4xx_hal_usart.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>../Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_usart.c</FilePath>
             </File>
           </Files>
         </Group>

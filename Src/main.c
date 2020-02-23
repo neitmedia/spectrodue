@@ -47,29 +47,80 @@
 SPI_HandleTypeDef hspi1;
 
 TIM_HandleTypeDef htim3;
+TIM_HandleTypeDef htim5;
 
-UART_HandleTypeDef huart4;
-USART_HandleTypeDef husart1;
+UART_HandleTypeDef huart1;
+UART_HandleTypeDef huart3;
 
 /* USER CODE BEGIN PV */
 extern volatile int triggered;
 volatile int triggered;
 uint16_t spektrum[288];
+uint16_t werte[288];
+volatile int dataReady = 0;
+uint8_t readData = 0;
+uint8_t recvdata[10];
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_SPI1_Init(void);
-static void MX_USART1_Init(void);
+static void MX_USART1_UART_Init(void);
 static void MX_TIM3_Init(void);
-static void MX_UART4_Init(void);
+static void MX_TIM5_Init(void);
+static void MX_USART3_UART_Init(void);
 /* USER CODE BEGIN PFP */
+
+// function, that sends data (1 byte) via UART to the digital host
+void uart_put(uint8_t data){
+ HAL_UART_Transmit(&huart1, &data, 1, 10);
+}
+
+/* This function is triggered by Timer 3,
+so it is called every period of the CLK pulse of the spectrometer.
+Due to this triggering, we make sure, that the analog value is sampled
+exactly at the moment, a pixel value is clocked out */
+void TIM3_IRQHandler(void)
+{
+  /* USER CODE BEGIN TIM3_IRQn 0 */
+
+  /* USER CODE END TIM3_IRQn 0 */
+  HAL_TIM_IRQHandler(&htim3);
+  /* USER CODE BEGIN TIM3_IRQn 1 */
+	
+	/* Sample values only, if the correct amount of falling edges have been counted */
+	if ((triggered >= 87) && (triggered < 375)) { 
+		// sample pixel value
+    werte[triggered-87] = ADS8860_ReadValue();
+  } else if (triggered == 375) {
+		// if enough pixel values have been sampled, set dataReady flag
+		dataReady = 1;
+	}
+	// increment variable triggered every period of Timer 3
+	triggered++;
+  /* USER CODE END TIM3_IRQn 1 */
+}
+
+
+/* This function is called on the falling edge of Timer 5 Channel 2 (Spectrometer ST) */
+void HAL_TIM_PWM_PulseFinishedCallback(TIM_HandleTypeDef *htim) {
+	// check that the interrupt was triggered by the right timer (Timer 5)
+  if(htim->Instance == TIM5){
+		// reset trigger gate counter
+	  triggered = 0;
+   }
+}
 
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+
+void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi) {
+	__nop();
+}
+
 
 #ifdef __GNUC__
 	#define PUTCHAR_PROTOTYPE int__io__putchar(int ch)
@@ -79,7 +130,7 @@ static void MX_UART4_Init(void);
 	
 PUTCHAR_PROTOTYPE
 {
-	HAL_USART_Transmit(&husart1, (uint8_t *)&ch, 1, 0xFFFF);
+	uart_put(ch);
 	return ch;
 }
 
@@ -92,8 +143,7 @@ PUTCHAR_PROTOTYPE
 int main(void)
 {
   /* USER CODE BEGIN 1 */
-  //uint16_t adc = 0;
-	uint16_t werte[288];
+
   /* USER CODE END 1 */
   
 
@@ -116,13 +166,34 @@ int main(void)
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_SPI1_Init();
-  MX_USART1_Init();
+  MX_USART1_UART_Init();
   MX_TIM3_Init();
-  MX_UART4_Init();
+  MX_TIM5_Init();
+  MX_USART3_UART_Init();
   /* USER CODE BEGIN 2 */
-  HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_1); 
-  printf("\n\r UART Test Passed~ \n\r");
+	
+	// Enable PWM Output on Timer 3 Channel 3 (PC8)
+	// -> CLK for Hamamatsu Spectrometer [225 kHz]
+  HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_3);
+	
+	// Enable PWM Output on Timer 5 Channel 1 (PA0)
+	// -> ST for Hamamatsu Spectrometer
+	// [HIGH Period of ST determines integration time]
+	HAL_TIM_PWM_Start(&htim5, TIM_CHANNEL_1);
+	
+	// Enable Timer 3 interrupt that triggers ADC
+	HAL_TIM_Base_Start_IT(&htim3);
+	
+	// Enable Timer 5 interrupt (needed for ADC trigger gating)
+	HAL_TIM_Base_Start_IT(&htim5);
+	
+	// Start Timer 5 Channel 2 Output Compare and interrupt (needed for ADC trigger gating)
+	HAL_TIM_OC_Start(&htim5, TIM_CHANNEL_2);
+  HAL_TIM_PWM_Start_IT(&htim5, TIM_CHANNEL_2);
+	
+	// Initialize ADC
 	ads8860_Init();
+	
   /* USER CODE END 2 */
  
  
@@ -131,23 +202,67 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-		// Sende Startpuls an Spektrometerbaustein
-		HAL_GPIO_WritePin(ST_GPIO_Port, ST_Pin, GPIO_PIN_SET);
-		for (uint16_t i = 0; i < 10000; i++) {
-		  __nop();
-		}
-		HAL_GPIO_WritePin(ST_GPIO_Port, ST_Pin, GPIO_PIN_RESET);
-		for (uint16_t i = 0; i < 10000; i++) {
-		  __nop();
+		/* Receive integration time from digital host
+			 -> receive 6 bytes from digital host
+					the first byte is just a control byte to make sure,
+					that only wanted data is received		
+					the second, third, fourth and fifth bytes are data bytes
+					that together form a 32 bit value for integration time
+		
+					from the C12880MA datasheet:
+					"The integration time equals the high period of ST plus 48 CLK pulses"
+		
+					minimum start pulse high period: 6/f(CLK) = 6 / 250 kHz = 24 us => counter value: 730
+					3.3 ms / 100000 = 33 ns integration time resolution
+					min. integration time: 24 us + 48/250 kHz = 216 us
+					max. integration time: MAX_INT*32 ns + 48/250 kHz = 68,7 s */
+		
+		// Declare and initialize variable rxValue and byte array rx_buff;
+		uint32_t rxValue = 0;
+		uint8_t rx_buff[6];
+		
+		// Receive 6 bytes from digital host
+		HAL_UART_Receive(&huart3, rx_buff, 6, 10);
+		
+		// Convert the 4 data bytes to one 32 bit uint32_t value
+		rxValue = (rx_buff[1] << 24) | (rx_buff[2] << 16) | (rx_buff[3] << 8) | rx_buff[4];
+		
+		// If control byte has the right value (0x1F) and rxValue is > 0, set timer values
+		if ((rx_buff[0] == 0x1F) && (rxValue > 0)) {
+			// Set Timer 5 Counter Period
+			TIM5->ARR = rxValue + 5000000;
+			// Set Timer 5 Channel 1 Pulse
+			TIM5->CCR1 = rxValue;
+			// Set Timer 5 Channel 2 Pulse
+			TIM5->CCR2 = rxValue;
 		}
 		
-		for (uint16_t i=0;i<288;i++) {
-      werte[i] = ADS8860_ReadValue();
-		}
-		
-		HAL_Delay(10);
-	
-    printf("%d\n", werte[150]);
+		// if data is ready, send spectrum to digital host via UART
+		if (dataReady == 1) {
+			// reset dataReady flag
+			dataReady = 0;
+			
+			// send string "!spek!" to digital host
+			uart_put(10);
+			uart_put(33);
+			uart_put(115);
+			uart_put(112);
+			uart_put(101);
+			uart_put(107);
+			uart_put(33);
+			uart_put(10);
+			
+			/* send spectrum to the digital host
+				 to do this this, iterate through the whole spectrum array,
+				 split the 16 bit value into two 8 bit values and
+				 send the values via UART */
+			for (uint16_t i=0;i<288;i++) {
+				uint8_t xlow = werte[i] & 0xff;
+				uint8_t xhigh = (werte[i] >> 8);
+				uart_put(xhigh);
+				uart_put(xlow);
+			}
+	  }
 		
     /* USER CODE END WHILE */
 
@@ -228,7 +343,7 @@ static void MX_SPI1_Init(void)
   hspi1.Init.CLKPolarity = SPI_POLARITY_LOW;
   hspi1.Init.CLKPhase = SPI_PHASE_1EDGE;
   hspi1.Init.NSS = SPI_NSS_SOFT;
-  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_4;
+  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_8;
   hspi1.Init.FirstBit = SPI_FIRSTBIT_MSB;
   hspi1.Init.TIMode = SPI_TIMODE_DISABLE;
   hspi1.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
@@ -263,9 +378,9 @@ static void MX_TIM3_Init(void)
 
   /* USER CODE END TIM3_Init 1 */
   htim3.Instance = TIM3;
-  htim3.Init.Prescaler = 8;
+  htim3.Init.Prescaler = 3;
   htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim3.Init.Period = 50;
+  htim3.Init.Period = 100;
   htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
   if (HAL_TIM_Base_Init(&htim3) != HAL_OK)
@@ -288,10 +403,10 @@ static void MX_TIM3_Init(void)
     Error_Handler();
   }
   sConfigOC.OCMode = TIM_OCMODE_PWM1;
-  sConfigOC.Pulse = 25;
+  sConfigOC.Pulse = 50;
   sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
   sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
-  if (HAL_TIM_PWM_ConfigChannel(&htim3, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
+  if (HAL_TIM_PWM_ConfigChannel(&htim3, &sConfigOC, TIM_CHANNEL_3) != HAL_OK)
   {
     Error_Handler();
   }
@@ -303,35 +418,70 @@ static void MX_TIM3_Init(void)
 }
 
 /**
-  * @brief UART4 Initialization Function
+  * @brief TIM5 Initialization Function
   * @param None
   * @retval None
   */
-static void MX_UART4_Init(void)
+static void MX_TIM5_Init(void)
 {
 
-  /* USER CODE BEGIN UART4_Init 0 */
+  /* USER CODE BEGIN TIM5_Init 0 */
 
-  /* USER CODE END UART4_Init 0 */
+  /* USER CODE END TIM5_Init 0 */
 
-  /* USER CODE BEGIN UART4_Init 1 */
+  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+  TIM_OC_InitTypeDef sConfigOC = {0};
 
-  /* USER CODE END UART4_Init 1 */
-  huart4.Instance = UART4;
-  huart4.Init.BaudRate = 1000000;
-  huart4.Init.WordLength = UART_WORDLENGTH_8B;
-  huart4.Init.StopBits = UART_STOPBITS_1;
-  huart4.Init.Parity = UART_PARITY_NONE;
-  huart4.Init.Mode = UART_MODE_TX_RX;
-  huart4.Init.HwFlowCtl = UART_HWCONTROL_NONE;
-  huart4.Init.OverSampling = UART_OVERSAMPLING_16;
-  if (HAL_UART_Init(&huart4) != HAL_OK)
+  /* USER CODE BEGIN TIM5_Init 1 */
+
+  /* USER CODE END TIM5_Init 1 */
+  htim5.Instance = TIM5;
+  htim5.Init.Prescaler = 2;
+  htim5.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim5.Init.Period = 5000000;
+  htim5.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim5.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim5) != HAL_OK)
   {
     Error_Handler();
   }
-  /* USER CODE BEGIN UART4_Init 2 */
+  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+  if (HAL_TIM_ConfigClockSource(&htim5, &sClockSourceConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_TIM_PWM_Init(&htim5) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_TIM_OC_Init(&htim5) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim5, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sConfigOC.OCMode = TIM_OCMODE_PWM1;
+  sConfigOC.Pulse = 500;
+  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
+  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
+  if (HAL_TIM_PWM_ConfigChannel(&htim5, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sConfigOC.OCMode = TIM_OCMODE_TIMING;
+  if (HAL_TIM_OC_ConfigChannel(&htim5, &sConfigOC, TIM_CHANNEL_2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM5_Init 2 */
 
-  /* USER CODE END UART4_Init 2 */
+  /* USER CODE END TIM5_Init 2 */
+  HAL_TIM_MspPostInit(&htim5);
 
 }
 
@@ -340,7 +490,7 @@ static void MX_UART4_Init(void)
   * @param None
   * @retval None
   */
-static void MX_USART1_Init(void)
+static void MX_USART1_UART_Init(void)
 {
 
   /* USER CODE BEGIN USART1_Init 0 */
@@ -350,22 +500,53 @@ static void MX_USART1_Init(void)
   /* USER CODE BEGIN USART1_Init 1 */
 
   /* USER CODE END USART1_Init 1 */
-  husart1.Instance = USART1;
-  husart1.Init.BaudRate = 115200;
-  husart1.Init.WordLength = USART_WORDLENGTH_8B;
-  husart1.Init.StopBits = USART_STOPBITS_1;
-  husart1.Init.Parity = USART_PARITY_NONE;
-  husart1.Init.Mode = USART_MODE_TX;
-  husart1.Init.CLKPolarity = USART_POLARITY_LOW;
-  husart1.Init.CLKPhase = USART_PHASE_1EDGE;
-  husart1.Init.CLKLastBit = USART_LASTBIT_DISABLE;
-  if (HAL_USART_Init(&husart1) != HAL_OK)
+  huart1.Instance = USART1;
+  huart1.Init.BaudRate = 115200;
+  huart1.Init.WordLength = UART_WORDLENGTH_8B;
+  huart1.Init.StopBits = UART_STOPBITS_1;
+  huart1.Init.Parity = UART_PARITY_NONE;
+  huart1.Init.Mode = UART_MODE_TX;
+  huart1.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart1.Init.OverSampling = UART_OVERSAMPLING_16;
+  if (HAL_UART_Init(&huart1) != HAL_OK)
   {
     Error_Handler();
   }
   /* USER CODE BEGIN USART1_Init 2 */
-
   /* USER CODE END USART1_Init 2 */
+
+}
+
+/**
+  * @brief USART3 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_USART3_UART_Init(void)
+{
+
+  /* USER CODE BEGIN USART3_Init 0 */
+
+  /* USER CODE END USART3_Init 0 */
+
+  /* USER CODE BEGIN USART3_Init 1 */
+
+  /* USER CODE END USART3_Init 1 */
+  huart3.Instance = USART3;
+  huart3.Init.BaudRate = 115200;
+  huart3.Init.WordLength = UART_WORDLENGTH_8B;
+  huart3.Init.StopBits = UART_STOPBITS_1;
+  huart3.Init.Parity = UART_PARITY_NONE;
+  huart3.Init.Mode = UART_MODE_TX_RX;
+  huart3.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart3.Init.OverSampling = UART_OVERSAMPLING_16;
+  if (HAL_UART_Init(&huart3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN USART3_Init 2 */
+
+  /* USER CODE END USART3_Init 2 */
 
 }
 
@@ -382,6 +563,7 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOF_CLK_ENABLE();
   __HAL_RCC_GPIOH_CLK_ENABLE();
   __HAL_RCC_GPIOA_CLK_ENABLE();
+  __HAL_RCC_GPIOB_CLK_ENABLE();
   __HAL_RCC_GPIOG_CLK_ENABLE();
   __HAL_RCC_GPIOC_CLK_ENABLE();
 
@@ -389,7 +571,7 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4|GPIO_PIN_7, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(ST_GPIO_Port, ST_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOG, GPIO_PIN_5, GPIO_PIN_RESET);
 
   /*Configure GPIO pin : PF0 */
   GPIO_InitStruct.Pin = GPIO_PIN_0;
@@ -404,20 +586,23 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : ST_Pin */
-  GPIO_InitStruct.Pin = ST_Pin;
+  /*Configure GPIO pin : PG5 */
+  GPIO_InitStruct.Pin = GPIO_PIN_5;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(ST_GPIO_Port, &GPIO_InitStruct);
-
-  /* EXTI interrupt init*/
-  HAL_NVIC_SetPriority(EXTI0_IRQn, 0, 0);
-  HAL_NVIC_EnableIRQ(EXTI0_IRQn);
+  HAL_GPIO_Init(GPIOG, &GPIO_InitStruct);
 
 }
 
 /* USER CODE BEGIN 4 */
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
+	
+//	__nop();
+}
+void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart) {
+//	__nop();
+}
 /* USER CODE END 4 */
 
 /**
